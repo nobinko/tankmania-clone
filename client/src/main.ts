@@ -1,6 +1,9 @@
 import Phaser from "phaser";
 import { io } from "socket.io-client";
 
+// ✅ 2-A（Vite proxy）を入れていれば、devでもprodでもこれでOK
+// - dev: http://localhost:5173 から /socket.io を proxy 経由で http://localhost:3000 に流れる
+// - prod(Render): 同一オリジンでそのまま繋がる
 const socket = io();
 
 type Player = { id: string; x: number; y: number; hp: number };
@@ -12,22 +15,76 @@ class GameScene extends Phaser.Scene {
   bullets = new Map<string, Phaser.GameObjects.Arc>();
   aiming = false;
 
-  // ★追加：ネット状態表示
+  // ★ネット状態表示
   netText!: Phaser.GameObjects.Text;
+
+  // ★操作説明オーバーレイ
+  helpContainer!: Phaser.GameObjects.Container;
+  helpBg!: Phaser.GameObjects.Rectangle;
+  helpText!: Phaser.GameObjects.Text;
 
   private shortId(id: string | null) {
     return id ? id.slice(0, 6) : "------";
   }
 
   private setNetStatus(line: string) {
-    // 1行目だけ固定で「NET:」
     this.netText.setText(`NET: ${line}`);
+  }
+
+  private buildHelpOverlay() {
+    const pad = 10;
+    const margin = 12;
+
+    const helpLines = [
+      "操作",
+      "・左クリック：移動（遠い地点をクリック）",
+      "・自機の近くをクリック：AIM開始（ドラッグして方向）",
+      "・ボタンを離す：発射",
+      "・H：このヘルプ表示/非表示",
+      "",
+      "※ NET が CONNECTED 以外なら再接続中かも",
+    ].join("\n");
+
+    this.helpText = this.add
+      .text(0, 0, helpLines, {
+        fontFamily: "monospace",
+        fontSize: "13px",
+        color: "#ffffff",
+        lineSpacing: 4,
+      })
+      .setOrigin(0, 0);
+
+    const w = this.helpText.width + pad * 2;
+    const h = this.helpText.height + pad * 2;
+
+    // 左下に配置
+    const x = margin;
+    const y = this.scale.height - h - margin;
+
+    this.helpBg = this.add
+      .rectangle(x, y, w, h, 0x000000, 0.55)
+      .setOrigin(0, 0);
+
+    this.helpText.setPosition(x + pad, y + pad);
+
+    this.helpContainer = this.add.container(0, 0, [this.helpBg, this.helpText]);
+
+    // 画面固定＆最前面（UIなので）
+    // ScrollFactor 0 は固定UI用に使える :contentReference[oaicite:4]{index=4}
+    this.helpBg.setScrollFactor(0).setDepth(999);
+    this.helpText.setScrollFactor(0).setDepth(999);
+    this.helpContainer.setDepth(999);
+
+    // 8秒後に自動で消す（邪魔になりにくくする）
+    this.time.delayedCall(8000, () => {
+      if (this.helpContainer?.visible) this.helpContainer.setVisible(false);
+    });
   }
 
   create() {
     this.input.mouse?.disableContextMenu();
 
-    // ★追加：左上HUD（カメラに固定＆最前面）
+    // 左上HUD（カメラ固定＆最前面）
     this.netText = this.add
       .text(12, 12, "NET: CONNECTING", {
         fontFamily: "monospace",
@@ -38,6 +95,14 @@ class GameScene extends Phaser.Scene {
       })
       .setScrollFactor(0)
       .setDepth(1000);
+
+    // 操作説明オーバーレイ
+    this.buildHelpOverlay();
+
+    // Hでトグル（PhaserのKeyboard入力） :contentReference[oaicite:5]{index=5}
+    this.input.keyboard?.on("keydown-H", () => {
+      this.helpContainer.setVisible(!this.helpContainer.visible);
+    });
 
     // 初期状態
     this.setNetStatus(socket.connected ? "CONNECTED" : "CONNECTING");
@@ -58,8 +123,7 @@ class GameScene extends Phaser.Scene {
       this.setNetStatus(`CONNECT_ERROR (${msg})`);
     });
 
-    // ★追加：再接続の進捗（Manager側イベント）
-    // Socket.IOクライアントはデフォルトで再接続を試みる :contentReference[oaicite:1]{index=1}
+    // 再接続の進捗（Manager側イベント）
     socket.io.on("reconnect_attempt", (attempt: number) => {
       this.setNetStatus(`RECONNECTING (try ${attempt})`);
     });
@@ -87,7 +151,7 @@ class GameScene extends Phaser.Scene {
       const dx = mx - me.x, dy = my - me.y;
       const d = Math.hypot(dx, dy);
 
-      if (d < 24) this.aiming = true;            // 自分の近く→AIM
+      if (d < 24) this.aiming = true;             // 自分の近く→AIM
       else socket.emit("move", { x: mx, y: my }); // それ以外→移動
     });
 
