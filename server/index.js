@@ -13,6 +13,13 @@ const SHOOT_COOLDOWN_MS = 450;
 const BULLET_SPEED = 520;
 const BULLET_TTL_MS = 1500;
 const HIT_RADIUS = 16;
+const RESPAWN_INVULN_MS = 1500;
+const RESPAWN_POINTS = [
+  { x: 140, y: 140 },
+  { x: 660, y: 140 },
+  { x: 140, y: 460 },
+  { x: 660, y: 460 },
+];
 
 const app = express();
 
@@ -42,16 +49,32 @@ function clampMove(fromX, fromY, toX, toY, maxDist) {
   return { x: fromX + dx * k, y: fromY + dy * k };
 }
 const now = () => Date.now();
+const respawnPlayer = (player, t) => {
+  const spawn = RESPAWN_POINTS[player.spawnIndex % RESPAWN_POINTS.length];
+  player.spawnIndex += 1;
+  player.x = spawn.x + Math.random() * 20 - 10;
+  player.y = spawn.y + Math.random() * 20 - 10;
+  player.hp = 1.0;
+  player.move = null;
+  player.invulnUntil = t + RESPAWN_INVULN_MS;
+  player.nextActionAt = t + 600;
+};
 
 io.on("connection", (socket) => {
-  players.set(socket.id, {
+  const player = {
     id: socket.id,
-    x: 200 + Math.random() * 200,
-    y: 200 + Math.random() * 200,
+    x: 0,
+    y: 0,
     hp: 1.0,
     move: null,
     nextActionAt: 0,
-  });
+    invulnUntil: 0,
+    score: 0,
+    deaths: 0,
+    spawnIndex: 0,
+  };
+  respawnPlayer(player, now());
+  players.set(socket.id, player);
 
   socket.on("move", ({ x, y }) => {
     const p = players.get(socket.id);
@@ -114,17 +137,18 @@ setInterval(() => {
   for (const b of bullets) {
     for (const p of players.values()) {
       if (p.id === b.owner) continue;
+      if (t < p.invulnUntil) continue;
       const d = Math.hypot(p.x - b.x, p.y - b.y);
       if (d < HIT_RADIUS) {
         p.hp = Math.max(0, p.hp - 0.2);
         b.bornAt = 0;
         if (p.hp <= 0) {
-          p.hp = 1.0;
-          p.x = 200 + Math.random() * 200;
-          p.y = 200 + Math.random() * 200;
-          p.move = null;
-          p.nextActionAt = t + 600;
+          p.deaths += 1;
+          const killer = players.get(b.owner);
+          if (killer) killer.score += 1;
+          respawnPlayer(p, t);
         }
+        break;
       }
     }
   }
@@ -132,7 +156,14 @@ setInterval(() => {
 
 // 状態配信
 setInterval(() => {
-  const ps = Array.from(players.values()).map(p => ({ id: p.id, x: p.x, y: p.y, hp: p.hp }));
+  const ps = Array.from(players.values()).map(p => ({
+    id: p.id,
+    x: p.x,
+    y: p.y,
+    hp: p.hp,
+    score: p.score,
+    deaths: p.deaths,
+  }));
   const bs = bullets.filter(b => b.bornAt > 0).map(b => ({ id: b.id, x: b.x, y: b.y }));
   io.emit("state", { t: now(), players: ps, bullets: bs });
 }, 1000 / STATE_BROADCAST_HZ);
