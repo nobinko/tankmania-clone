@@ -6,7 +6,7 @@ import { io } from "socket.io-client";
 // - prod(Render): 同一オリジンでそのまま繋がる
 const socket = io();
 
-type Player = { id: string; x: number; y: number; hp: number };
+type Player = { id: string; x: number; y: number; hp: number; score: number; deaths: number };
 type Bullet = { id: string; x: number; y: number };
 
 class GameScene extends Phaser.Scene {
@@ -17,6 +17,7 @@ class GameScene extends Phaser.Scene {
 
   // ★ネット状態表示
   netText!: Phaser.GameObjects.Text;
+  scoreText!: Phaser.GameObjects.Text;
 
   // ★操作説明オーバーレイ
   helpContainer!: Phaser.GameObjects.Container;
@@ -81,6 +82,14 @@ class GameScene extends Phaser.Scene {
     });
   }
 
+  private setScoreStatus(player?: Player) {
+    if (!player) {
+      this.scoreText.setText("SCORE: --\nDEATHS: --");
+      return;
+    }
+    this.scoreText.setText(`SCORE: ${player.score}\nDEATHS: ${player.deaths}`);
+  }
+
   create() {
     this.input.mouse?.disableContextMenu();
 
@@ -96,6 +105,18 @@ class GameScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(1000);
 
+    this.scoreText = this.add
+      .text(12, 48, "SCORE: --\nDEATHS: --", {
+        fontFamily: "monospace",
+        fontSize: "14px",
+        color: "#ffffff",
+        backgroundColor: "rgba(0,0,0,0.55)",
+        padding: { x: 8, y: 6 },
+        lineSpacing: 2,
+      })
+      .setScrollFactor(0)
+      .setDepth(1000);
+
     // 操作説明オーバーレイ
     this.buildHelpOverlay();
 
@@ -106,6 +127,7 @@ class GameScene extends Phaser.Scene {
 
     // 初期状態
     this.setNetStatus(socket.connected ? "CONNECTED" : "CONNECTING");
+    this.setScoreStatus();
 
     // Socket.IO：接続/切断/エラー
     socket.on("connect", () => {
@@ -116,6 +138,7 @@ class GameScene extends Phaser.Scene {
     socket.on("disconnect", (reason) => {
       this.meId = null;
       this.setNetStatus(`DISCONNECTED (${reason})`);
+      this.setScoreStatus();
     });
 
     socket.on("connect_error", (err) => {
@@ -141,6 +164,8 @@ class GameScene extends Phaser.Scene {
     socket.on("state", (state: { players: Player[]; bullets: Bullet[] }) => {
       this.syncPlayers(state.players);
       this.syncBullets(state.bullets);
+      const me = state.players.find((player) => player.id === this.meId);
+      this.setScoreStatus(me);
     });
 
     this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
