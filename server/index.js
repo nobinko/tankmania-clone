@@ -77,6 +77,7 @@ io.on("connection", (socket) => {
     x: 0,
     y: 0,
     hp: 1.0,
+    name: "Player",
     move: null,
     nextActionAt: 0,
     invulnUntil: 0,
@@ -124,6 +125,14 @@ io.on("connection", (socket) => {
       bornAt: t
     });
     p.nextActionAt = t + SHOOT_COOLDOWN_MS;
+  });
+
+  socket.on("set_name", (payload) => {
+    const p = players.get(socket.id);
+    if (!p) return;
+    const rawName = typeof payload?.name === "string" ? payload.name.trim() : "";
+    if (!rawName) return;
+    p.name = rawName.slice(0, 20);
   });
 
   socket.on("disconnect", () => {
@@ -186,6 +195,7 @@ setInterval(() => {
     x: p.x,
     y: p.y,
     hp: p.hp,
+    name: p.name,
     score: p.score,
     deaths: p.deaths,
   }));
