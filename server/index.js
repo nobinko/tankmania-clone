@@ -14,6 +14,8 @@ const BULLET_SPEED = 520;
 const BULLET_TTL_MS = 1500;
 const HIT_RADIUS = 16;
 const RESPAWN_INVULN_MS = 1500;
+const WORLD_WIDTH = 800;
+const WORLD_HEIGHT = 600;
 const RESPAWN_POINTS = [
   { x: 140, y: 140 },
   { x: 660, y: 140 },
@@ -48,6 +50,11 @@ function clampMove(fromX, fromY, toX, toY, maxDist) {
   const k = maxDist / d;
   return { x: fromX + dx * k, y: fromY + dy * k };
 }
+const isFiniteNumber = (value) => Number.isFinite(value);
+const normalizeAngle = (angle) => {
+  const twoPi = Math.PI * 2;
+  return ((angle + Math.PI) % twoPi + twoPi) % twoPi - Math.PI;
+};
 const now = () => Date.now();
 const respawnPlayer = (player, t) => {
   const spawn = RESPAWN_POINTS[player.spawnIndex % RESPAWN_POINTS.length];
@@ -76,29 +83,44 @@ io.on("connection", (socket) => {
   respawnPlayer(player, now());
   players.set(socket.id, player);
 
-  socket.on("move", ({ x, y }) => {
+  socket.on("move", (payload) => {
+    const { x, y } = payload ?? {};
     const p = players.get(socket.id);
     if (!p) return;
     const t = now();
     if (t < p.nextActionAt) return;
+    if (!isFiniteNumber(x) || !isFiniteNumber(y)) {
+      console.warn("move: invalid coordinates", { x, y, id: socket.id });
+      return;
+    }
+    if (x < 0 || x > WORLD_WIDTH || y < 0 || y > WORLD_HEIGHT) {
+      console.warn("move: out of bounds", { x, y, id: socket.id });
+      return;
+    }
 
     const target = clampMove(p.x, p.y, x, y, MOVE_MAX_DIST);
     p.move = { sx: p.x, sy: p.y, tx: target.x, ty: target.y, t0: t, t1: t + MOVE_COOLDOWN_MS };
     p.nextActionAt = t + MOVE_COOLDOWN_MS;
   });
 
-  socket.on("shoot", ({ angle }) => {
+  socket.on("shoot", (payload) => {
+    const { angle } = payload ?? {};
     const p = players.get(socket.id);
     if (!p) return;
     const t = now();
     if (t < p.nextActionAt) return;
+    if (!isFiniteNumber(angle)) {
+      console.warn("shoot: invalid angle", { angle, id: socket.id });
+      return;
+    }
+    const normalizedAngle = normalizeAngle(angle);
 
     bullets.push({
       id: `${socket.id}:${t}:${Math.random().toString(16).slice(2)}`,
       owner: socket.id,
       x: p.x, y: p.y,
-      vx: Math.cos(angle) * BULLET_SPEED,
-      vy: Math.sin(angle) * BULLET_SPEED,
+      vx: Math.cos(normalizedAngle) * BULLET_SPEED,
+      vy: Math.sin(normalizedAngle) * BULLET_SPEED,
       bornAt: t
     });
     p.nextActionAt = t + SHOOT_COOLDOWN_MS;
