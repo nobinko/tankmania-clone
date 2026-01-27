@@ -8,12 +8,16 @@ const socket = io();
 
 type Player = { id: string; x: number; y: number; hp: number; score: number; deaths: number };
 type Bullet = { id: string; x: number; y: number };
+type ServerState = { t: number; players: Player[]; bullets: Bullet[] };
 
 class GameScene extends Phaser.Scene {
   meId: string | null = null;
   players = new Map<string, Phaser.GameObjects.Container>();
   bullets = new Map<string, Phaser.GameObjects.Arc>();
   aiming = false;
+  private stateBuffer: ServerState[] = [];
+  private lastServerState: ServerState | null = null;
+  private serverTimeOffsetMs = 0;
 
   // ★ネット状態表示
   netText!: Phaser.GameObjects.Text;
@@ -161,9 +165,14 @@ class GameScene extends Phaser.Scene {
     });
 
     // ゲーム状態
-    socket.on("state", (state: { players: Player[]; bullets: Bullet[] }) => {
-      this.syncPlayers(state.players);
-      this.syncBullets(state.bullets);
+    socket.on("state", (state: ServerState) => {
+      const clientNow = Date.now();
+      this.serverTimeOffsetMs = state.t - clientNow;
+      this.lastServerState = state;
+      this.stateBuffer.push(state);
+      if (this.stateBuffer.length > 2) {
+        this.stateBuffer.shift();
+      }
       const me = state.players.find((player) => player.id === this.meId);
       this.setScoreStatus(me);
     });
@@ -191,6 +200,52 @@ class GameScene extends Phaser.Scene {
       const angle = Math.atan2(my - me.y, mx - me.x);
       socket.emit("shoot", { angle });
     });
+  }
+
+  update() {
+    if (!this.lastServerState) return;
+
+    if (this.stateBuffer.length < 2) {
+      this.syncPlayers(this.lastServerState.players);
+      this.syncBullets(this.lastServerState.bullets);
+      return;
+    }
+
+    const [prev, next] = this.stateBuffer;
+    const nowServerTime = Date.now() + this.serverTimeOffsetMs;
+    const span = next.t - prev.t;
+    if (span <= 0) {
+      this.syncPlayers(next.players);
+      this.syncBullets(next.bullets);
+      return;
+    }
+
+    const alpha = Phaser.Math.Clamp((nowServerTime - prev.t) / span, 0, 1);
+    const prevPlayers = new Map(prev.players.map((player) => [player.id, player]));
+    const prevBullets = new Map(prev.bullets.map((bullet) => [bullet.id, bullet]));
+
+    const lerpedPlayers = next.players.map((player) => {
+      const base = prevPlayers.get(player.id);
+      if (!base) return player;
+      return {
+        ...player,
+        x: Phaser.Math.Linear(base.x, player.x, alpha),
+        y: Phaser.Math.Linear(base.y, player.y, alpha),
+      };
+    });
+
+    const lerpedBullets = next.bullets.map((bullet) => {
+      const base = prevBullets.get(bullet.id);
+      if (!base) return bullet;
+      return {
+        ...bullet,
+        x: Phaser.Math.Linear(base.x, bullet.x, alpha),
+        y: Phaser.Math.Linear(base.y, bullet.y, alpha),
+      };
+    });
+
+    this.syncPlayers(lerpedPlayers);
+    this.syncBullets(lerpedBullets);
   }
 
   syncPlayers(list: Player[]) {
