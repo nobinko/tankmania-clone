@@ -6,9 +6,92 @@ import { io } from "socket.io-client";
 // - prod(Render): 同一オリジンでそのまま繋がる
 const socket = io();
 
-type Player = { id: string; x: number; y: number; hp: number; score: number; deaths: number };
+type Player = { id: string; x: number; y: number; hp: number; name: string; score: number; deaths: number };
 type Bullet = { id: string; x: number; y: number };
 type ServerState = { t: number; players: Player[]; bullets: Bullet[] };
+
+const NAME_MAX_LENGTH = 20;
+let desiredName = "";
+let nameSubmitted = false;
+
+const sendName = (name: string) => {
+  if (!name) return;
+  socket.emit("set_name", { name });
+};
+
+const createEntryScreen = () => {
+  const overlay = document.createElement("div");
+  overlay.style.position = "fixed";
+  overlay.style.inset = "0";
+  overlay.style.display = "flex";
+  overlay.style.alignItems = "center";
+  overlay.style.justifyContent = "center";
+  overlay.style.background = "rgba(0, 0, 0, 0.6)";
+  overlay.style.zIndex = "2000";
+
+  const panel = document.createElement("div");
+  panel.style.background = "#1b1b1b";
+  panel.style.border = "1px solid #333";
+  panel.style.borderRadius = "8px";
+  panel.style.padding = "24px";
+  panel.style.color = "#fff";
+  panel.style.fontFamily = "monospace";
+  panel.style.textAlign = "center";
+
+  const title = document.createElement("div");
+  title.textContent = "Enter your name";
+  title.style.fontSize = "18px";
+  title.style.marginBottom = "12px";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "Player";
+  input.maxLength = NAME_MAX_LENGTH;
+  input.style.padding = "8px 10px";
+  input.style.fontSize = "16px";
+  input.style.width = "220px";
+  input.style.borderRadius = "6px";
+  input.style.border = "1px solid #444";
+  input.style.marginBottom = "12px";
+
+  const button = document.createElement("button");
+  button.textContent = "Start";
+  button.style.marginLeft = "8px";
+  button.style.padding = "8px 14px";
+  button.style.fontSize = "15px";
+  button.style.borderRadius = "6px";
+  button.style.border = "1px solid #444";
+  button.style.background = "#2c2c2c";
+  button.style.color = "#fff";
+  button.style.cursor = "pointer";
+
+  const form = document.createElement("div");
+  form.appendChild(input);
+  form.appendChild(button);
+
+  panel.appendChild(title);
+  panel.appendChild(form);
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+
+  const submit = () => {
+    const name = input.value.trim().slice(0, NAME_MAX_LENGTH);
+    desiredName = name || "Player";
+    nameSubmitted = true;
+    if (socket.connected) {
+      sendName(desiredName);
+    }
+    overlay.remove();
+  };
+
+  button.addEventListener("click", submit);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") submit();
+  });
+  input.focus();
+};
+
+createEntryScreen();
 
 class GameScene extends Phaser.Scene {
   meId: string | null = null;
@@ -137,6 +220,9 @@ class GameScene extends Phaser.Scene {
     socket.on("connect", () => {
       this.meId = socket.id ?? null;
       this.setNetStatus(`CONNECTED (${this.shortId(this.meId)})`);
+      if (nameSubmitted) {
+        sendName(desiredName);
+      }
     });
 
     socket.on("disconnect", (reason) => {
@@ -257,8 +343,15 @@ class GameScene extends Phaser.Scene {
       let obj = this.players.get(pl.id);
       if (!obj) {
         const body = this.add.circle(0, 0, 14, 0x888888);
+        const nameText = this.add
+          .text(0, -34, pl.name ?? "Player", {
+            fontFamily: "monospace",
+            fontSize: "12px",
+            color: "#ffffff",
+          })
+          .setOrigin(0.5);
         const hp = this.add.rectangle(0, -22, 34, 6, 0x00ff00).setOrigin(0.5);
-        obj = this.add.container(pl.x, pl.y, [body, hp]);
+        obj = this.add.container(pl.x, pl.y, [body, nameText, hp]);
         this.players.set(pl.id, obj);
       }
 
@@ -267,7 +360,10 @@ class GameScene extends Phaser.Scene {
       const body = obj.list[0] as Phaser.GameObjects.Arc;
       body.setFillStyle(pl.id === this.meId ? 0x66aaff : 0x888888);
 
-      const hpBar = obj.list[1] as Phaser.GameObjects.Rectangle;
+      const nameText = obj.list[1] as Phaser.GameObjects.Text;
+      nameText.setText(pl.name ?? "Player");
+
+      const hpBar = obj.list[2] as Phaser.GameObjects.Rectangle;
       hpBar.width = 34 * Math.max(0, Math.min(1, pl.hp));
       hpBar.setFillStyle(pl.hp > 0.5 ? 0x00ff00 : 0xffaa00);
     }
