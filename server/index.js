@@ -50,6 +50,10 @@ function clampMove(fromX, fromY, toX, toY, maxDist) {
   const k = maxDist / d;
   return { x: fromX + dx * k, y: fromY + dy * k };
 }
+const clampToWorld = (x, y) => ({
+  x: Math.min(WORLD_WIDTH, Math.max(0, x)),
+  y: Math.min(WORLD_HEIGHT, Math.max(0, y)),
+});
 const isFiniteNumber = (value) => Number.isFinite(value);
 const normalizeAngle = (angle) => {
   const twoPi = Math.PI * 2;
@@ -93,13 +97,9 @@ io.on("connection", (socket) => {
       console.warn("move: invalid coordinates", { x, y, id: socket.id });
       return;
     }
-    if (x < 0 || x > WORLD_WIDTH || y < 0 || y > WORLD_HEIGHT) {
-      console.warn("move: out of bounds", { x, y, id: socket.id });
-      return;
-    }
-
     const target = clampMove(p.x, p.y, x, y, MOVE_MAX_DIST);
-    p.move = { sx: p.x, sy: p.y, tx: target.x, ty: target.y, t0: t, t1: t + MOVE_COOLDOWN_MS };
+    const clampedTarget = clampToWorld(target.x, target.y);
+    p.move = { sx: p.x, sy: p.y, tx: clampedTarget.x, ty: clampedTarget.y, t0: t, t1: t + MOVE_COOLDOWN_MS };
     p.nextActionAt = t + MOVE_COOLDOWN_MS;
   });
 
@@ -152,6 +152,9 @@ setInterval(() => {
   for (const b of bullets) {
     b.x += b.vx * dt;
     b.y += b.vy * dt;
+    if (b.x < 0 || b.x > WORLD_WIDTH || b.y < 0 || b.y > WORLD_HEIGHT) {
+      b.bornAt = 0;
+    }
   }
 
   bullets = bullets.filter(b => (t - b.bornAt) <= BULLET_TTL_MS);
