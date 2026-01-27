@@ -11,24 +11,38 @@ type Bullet = { id: string; x: number; y: number };
 type ServerState = { t: number; players: Player[]; bullets: Bullet[] };
 
 const NAME_MAX_LENGTH = 20;
+type ScreenState = "entry" | "lobby" | "room";
+
 let desiredName = "";
-let nameSubmitted = false;
+let nameConfirmed = false;
+let currentScreen: ScreenState = "entry";
+let gameInstance: Phaser.Game | null = null;
+
+const uiRoot = document.createElement("div");
+uiRoot.style.position = "fixed";
+uiRoot.style.inset = "0";
+uiRoot.style.display = "flex";
+uiRoot.style.alignItems = "center";
+uiRoot.style.justifyContent = "center";
+uiRoot.style.background = "rgba(0, 0, 0, 0.6)";
+uiRoot.style.zIndex = "2000";
+document.body.appendChild(uiRoot);
 
 const sendName = (name: string) => {
   if (!name) return;
   socket.emit("set_name", { name });
 };
 
-const createEntryScreen = () => {
-  const overlay = document.createElement("div");
-  overlay.style.position = "fixed";
-  overlay.style.inset = "0";
-  overlay.style.display = "flex";
-  overlay.style.alignItems = "center";
-  overlay.style.justifyContent = "center";
-  overlay.style.background = "rgba(0, 0, 0, 0.6)";
-  overlay.style.zIndex = "2000";
+const setScreen = (next: ScreenState) => {
+  if (currentScreen === next) return;
+  currentScreen = next;
+  renderScreen();
+  if (currentScreen === "room") {
+    startGame();
+  }
+};
 
+const createPanel = (titleText: string) => {
   const panel = document.createElement("div");
   panel.style.background = "#1b1b1b";
   panel.style.border = "1px solid #333";
@@ -37,11 +51,19 @@ const createEntryScreen = () => {
   panel.style.color = "#fff";
   panel.style.fontFamily = "monospace";
   panel.style.textAlign = "center";
+  panel.style.minWidth = "300px";
 
   const title = document.createElement("div");
-  title.textContent = "Enter your name";
+  title.textContent = titleText;
   title.style.fontSize = "18px";
   title.style.marginBottom = "12px";
+
+  panel.appendChild(title);
+  return panel;
+};
+
+const renderEntry = () => {
+  const panel = createPanel("名前を入力してください");
 
   const input = document.createElement("input");
   input.type = "text";
@@ -55,7 +77,7 @@ const createEntryScreen = () => {
   input.style.marginBottom = "12px";
 
   const button = document.createElement("button");
-  button.textContent = "Start";
+  button.textContent = "入室";
   button.style.marginLeft = "8px";
   button.style.padding = "8px 14px";
   button.style.fontSize = "15px";
@@ -69,19 +91,17 @@ const createEntryScreen = () => {
   form.appendChild(input);
   form.appendChild(button);
 
-  panel.appendChild(title);
   panel.appendChild(form);
-  overlay.appendChild(panel);
-  document.body.appendChild(overlay);
+  uiRoot.appendChild(panel);
 
   const submit = () => {
     const name = input.value.trim().slice(0, NAME_MAX_LENGTH);
     desiredName = name || "Player";
-    nameSubmitted = true;
+    nameConfirmed = true;
     if (socket.connected) {
       sendName(desiredName);
     }
-    overlay.remove();
+    setScreen("lobby");
   };
 
   button.addEventListener("click", submit);
@@ -91,7 +111,50 @@ const createEntryScreen = () => {
   input.focus();
 };
 
-createEntryScreen();
+const renderLobby = () => {
+  const panel = createPanel("ロビー");
+
+  const nameLine = document.createElement("div");
+  nameLine.textContent = `名前: ${desiredName || "Player"}`;
+  nameLine.style.marginBottom = "16px";
+
+  const button = document.createElement("button");
+  button.textContent = "ルームへ入室";
+  button.style.padding = "8px 16px";
+  button.style.fontSize = "15px";
+  button.style.borderRadius = "6px";
+  button.style.border = "1px solid #444";
+  button.style.background = "#2c2c2c";
+  button.style.color = "#fff";
+  button.style.cursor = "pointer";
+
+  panel.appendChild(nameLine);
+  panel.appendChild(button);
+  uiRoot.appendChild(panel);
+
+  button.addEventListener("click", () => {
+    setScreen("room");
+  });
+};
+
+const renderScreen = () => {
+  uiRoot.innerHTML = "";
+  if (currentScreen === "room") {
+    uiRoot.style.display = "none";
+    return;
+  }
+  uiRoot.style.display = "flex";
+  if (currentScreen === "entry") renderEntry();
+  if (currentScreen === "lobby") renderLobby();
+};
+
+renderScreen();
+
+socket.on("connect", () => {
+  if (nameConfirmed) {
+    sendName(desiredName);
+  }
+});
 
 class GameScene extends Phaser.Scene {
   meId: string | null = null;
@@ -220,7 +283,7 @@ class GameScene extends Phaser.Scene {
     socket.on("connect", () => {
       this.meId = socket.id ?? null;
       this.setNetStatus(`CONNECTED (${this.shortId(this.meId)})`);
-      if (nameSubmitted) {
+      if (nameConfirmed) {
         sendName(desiredName);
       }
     });
@@ -399,10 +462,13 @@ class GameScene extends Phaser.Scene {
   }
 }
 
-new Phaser.Game({
-  type: Phaser.AUTO,
-  width: 800,
-  height: 600,
-  backgroundColor: "#111",
-  scene: [GameScene],
-});
+const startGame = () => {
+  if (gameInstance) return;
+  gameInstance = new Phaser.Game({
+    type: Phaser.AUTO,
+    width: 800,
+    height: 600,
+    backgroundColor: "#111",
+    scene: [GameScene],
+  });
+};
