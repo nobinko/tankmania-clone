@@ -41,6 +41,8 @@ const io = new Server(httpServer, {
 });
 
 const players = new Map();
+const rooms = new Map();
+const LOBBY_ROOM = "lobby";
 let bullets = [];
 
 function clampMove(fromX, fromY, toX, toY, maxDist) {
@@ -71,6 +73,31 @@ const respawnPlayer = (player, t) => {
   player.nextActionAt = t + 600;
 };
 
+const listRooms = () =>
+  Array.from(rooms.values()).map((room) => ({
+    id: room.id,
+    name: room.name,
+    count: room.members.size,
+  }));
+
+const broadcastRooms = () => {
+  io.to(LOBBY_ROOM).emit("rooms", listRooms());
+};
+
+const leaveRoom = (socket) => {
+  const currentRoomId = socket.data.roomId;
+  if (!currentRoomId) return;
+  const currentRoom = rooms.get(currentRoomId);
+  if (currentRoom) {
+    currentRoom.members.delete(socket.id);
+    if (currentRoom.members.size === 0) {
+      rooms.delete(currentRoomId);
+    }
+  }
+  socket.leave(currentRoomId);
+  socket.data.roomId = null;
+};
+
 io.on("connection", (socket) => {
   const player = {
     id: socket.id,
@@ -87,6 +114,51 @@ io.on("connection", (socket) => {
   };
   respawnPlayer(player, now());
   players.set(socket.id, player);
+  socket.join(LOBBY_ROOM);
+  socket.data.roomId = null;
+
+  socket.emit("rooms", listRooms());
+
+  socket.on("list_rooms", () => {
+    socket.emit("rooms", listRooms());
+  });
+
+  socket.on("create_room", (payload) => {
+    const name = typeof payload?.name === "string" ? payload.name.trim() : "";
+    if (!name) return;
+    const roomId = `room-${Math.random().toString(16).slice(2, 8)}`;
+    rooms.set(roomId, { id: roomId, name: name.slice(0, 30), members: new Set() });
+    broadcastRooms();
+  });
+
+  socket.on("join_room", (payload) => {
+    const roomId = typeof payload?.roomId === "string" ? payload.roomId : "";
+    const room = rooms.get(roomId);
+    if (!room) {
+      socket.emit("room_error", { message: "部屋が見つかりませんでした。" });
+      return;
+    }
+    leaveRoom(socket);
+    socket.leave(LOBBY_ROOM);
+    socket.join(roomId);
+    socket.data.roomId = roomId;
+    room.members.add(socket.id);
+    socket.emit("room_joined", { id: room.id, name: room.name });
+    broadcastRooms();
+  });
+
+  socket.on("lobby_message", (payload) => {
+    if (!socket.rooms.has(LOBBY_ROOM)) return;
+    const message = typeof payload?.message === "string" ? payload.message.trim() : "";
+    if (!message) return;
+    const name = players.get(socket.id)?.name ?? "Player";
+    io.to(LOBBY_ROOM).emit("lobby_message", {
+      id: socket.id,
+      name,
+      message: message.slice(0, 200),
+      ts: now(),
+    });
+  });
 
   socket.on("move", (payload) => {
     const { x, y } = payload ?? {};
@@ -138,6 +210,8 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     players.delete(socket.id);
     bullets = bullets.filter(b => b.owner !== socket.id);
+    leaveRoom(socket);
+    broadcastRooms();
   });
 });
 

@@ -9,6 +9,8 @@ const socket = io();
 type Player = { id: string; x: number; y: number; hp: number; name: string; score: number; deaths: number };
 type Bullet = { id: string; x: number; y: number };
 type ServerState = { t: number; players: Player[]; bullets: Bullet[] };
+type RoomInfo = { id: string; name: string; count: number };
+type LobbyMessage = { id: string; name: string; message: string; ts: number };
 
 const NAME_MAX_LENGTH = 20;
 type ScreenState = "entry" | "lobby" | "room";
@@ -17,6 +19,13 @@ let desiredName = "";
 let nameConfirmed = false;
 let currentScreen: ScreenState = "entry";
 let gameInstance: Phaser.Game | null = null;
+let rooms: RoomInfo[] = [];
+let selectedRoomId: string | null = null;
+let lobbyMessages: LobbyMessage[] = [];
+let roomListContainer: HTMLDivElement | null = null;
+let roomErrorLine: HTMLDivElement | null = null;
+let chatListContainer: HTMLDivElement | null = null;
+let joinRoomButton: HTMLButtonElement | null = null;
 
 const uiRoot = document.createElement("div");
 uiRoot.style.position = "fixed";
@@ -40,6 +49,9 @@ const setScreen = (next: ScreenState) => {
   if (currentScreen === "room") {
     startGame();
   }
+  if (currentScreen === "lobby") {
+    socket.emit("list_rooms");
+  }
 };
 
 const createPanel = (titleText: string) => {
@@ -60,6 +72,61 @@ const createPanel = (titleText: string) => {
 
   panel.appendChild(title);
   return panel;
+};
+
+const updateRoomListUI = () => {
+  if (!roomListContainer) return;
+  roomListContainer.innerHTML = "";
+  if (rooms.length === 0) {
+    const empty = document.createElement("div");
+    empty.textContent = "部屋がありません";
+    empty.style.color = "#aaa";
+    roomListContainer.appendChild(empty);
+  } else {
+    rooms.forEach((room) => {
+      const label = document.createElement("label");
+      label.style.display = "flex";
+      label.style.alignItems = "center";
+      label.style.gap = "8px";
+
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "room";
+      radio.value = room.id;
+      radio.checked = room.id === selectedRoomId;
+      radio.addEventListener("change", () => {
+        selectedRoomId = room.id;
+        if (roomErrorLine) roomErrorLine.textContent = "";
+        updateJoinButtonState();
+      });
+
+      const text = document.createElement("span");
+      text.textContent = `${room.name} (${room.count})`;
+
+      label.appendChild(radio);
+      label.appendChild(text);
+      roomListContainer.appendChild(label);
+    });
+  }
+  updateJoinButtonState();
+};
+
+const updateChatUI = () => {
+  if (!chatListContainer) return;
+  chatListContainer.innerHTML = "";
+  lobbyMessages.slice(-50).forEach((message) => {
+    const line = document.createElement("div");
+    line.textContent = `${message.name}: ${message.message}`;
+    chatListContainer.appendChild(line);
+  });
+  chatListContainer.scrollTop = chatListContainer.scrollHeight;
+};
+
+const updateJoinButtonState = () => {
+  if (!joinRoomButton) return;
+  joinRoomButton.disabled = !selectedRoomId;
+  joinRoomButton.style.opacity = selectedRoomId ? "1" : "0.6";
+  joinRoomButton.style.cursor = selectedRoomId ? "pointer" : "not-allowed";
 };
 
 const renderEntry = () => {
@@ -118,6 +185,62 @@ const renderLobby = () => {
   nameLine.textContent = `名前: ${desiredName || "Player"}`;
   nameLine.style.marginBottom = "16px";
 
+  const roomSection = document.createElement("div");
+  roomSection.style.display = "flex";
+  roomSection.style.flexDirection = "column";
+  roomSection.style.gap = "8px";
+  roomSection.style.marginBottom = "16px";
+
+  const roomTitle = document.createElement("div");
+  roomTitle.textContent = "部屋一覧";
+  roomTitle.style.fontWeight = "bold";
+
+  roomListContainer = document.createElement("div");
+  roomListContainer.style.display = "flex";
+  roomListContainer.style.flexDirection = "column";
+  roomListContainer.style.gap = "6px";
+  roomListContainer.style.maxHeight = "160px";
+  roomListContainer.style.overflowY = "auto";
+  roomListContainer.style.border = "1px solid #333";
+  roomListContainer.style.padding = "8px";
+
+  roomErrorLine = document.createElement("div");
+  roomErrorLine.style.color = "#ff8080";
+  roomErrorLine.style.minHeight = "18px";
+  roomErrorLine.style.fontSize = "12px";
+
+  const createForm = document.createElement("div");
+  createForm.style.display = "flex";
+  createForm.style.gap = "8px";
+  createForm.style.marginTop = "6px";
+
+  const createInput = document.createElement("input");
+  createInput.type = "text";
+  createInput.placeholder = "新しい部屋名";
+  createInput.maxLength = 30;
+  createInput.style.flex = "1";
+  createInput.style.padding = "6px 8px";
+  createInput.style.borderRadius = "6px";
+  createInput.style.border = "1px solid #444";
+
+  const createButton = document.createElement("button");
+  createButton.textContent = "作成";
+  createButton.style.padding = "6px 12px";
+  createButton.style.fontSize = "14px";
+  createButton.style.borderRadius = "6px";
+  createButton.style.border = "1px solid #444";
+  createButton.style.background = "#2c2c2c";
+  createButton.style.color = "#fff";
+  createButton.style.cursor = "pointer";
+
+  createForm.appendChild(createInput);
+  createForm.appendChild(createButton);
+
+  roomSection.appendChild(roomTitle);
+  roomSection.appendChild(roomListContainer);
+  roomSection.appendChild(roomErrorLine);
+  roomSection.appendChild(createForm);
+
   const button = document.createElement("button");
   button.textContent = "ルームへ入室";
   button.style.padding = "8px 16px";
@@ -127,18 +250,102 @@ const renderLobby = () => {
   button.style.background = "#2c2c2c";
   button.style.color = "#fff";
   button.style.cursor = "pointer";
+  joinRoomButton = button;
+
+  const chatSection = document.createElement("div");
+  chatSection.style.display = "flex";
+  chatSection.style.flexDirection = "column";
+  chatSection.style.gap = "8px";
+
+  const chatTitle = document.createElement("div");
+  chatTitle.textContent = "ロビーチャット";
+  chatTitle.style.fontWeight = "bold";
+
+  chatListContainer = document.createElement("div");
+  chatListContainer.style.background = "#0f0f0f";
+  chatListContainer.style.border = "1px solid #333";
+  chatListContainer.style.borderRadius = "6px";
+  chatListContainer.style.padding = "8px";
+  chatListContainer.style.height = "160px";
+  chatListContainer.style.overflowY = "auto";
+  chatListContainer.style.textAlign = "left";
+  chatListContainer.style.fontSize = "13px";
+
+  const chatForm = document.createElement("div");
+  chatForm.style.display = "flex";
+  chatForm.style.gap = "8px";
+
+  const chatInput = document.createElement("input");
+  chatInput.type = "text";
+  chatInput.placeholder = "メッセージを入力";
+  chatInput.maxLength = 200;
+  chatInput.style.flex = "1";
+  chatInput.style.padding = "6px 8px";
+  chatInput.style.borderRadius = "6px";
+  chatInput.style.border = "1px solid #444";
+
+  const chatButton = document.createElement("button");
+  chatButton.textContent = "送信";
+  chatButton.style.padding = "6px 12px";
+  chatButton.style.fontSize = "14px";
+  chatButton.style.borderRadius = "6px";
+  chatButton.style.border = "1px solid #444";
+  chatButton.style.background = "#2c2c2c";
+  chatButton.style.color = "#fff";
+  chatButton.style.cursor = "pointer";
+
+  chatForm.appendChild(chatInput);
+  chatForm.appendChild(chatButton);
+  chatSection.appendChild(chatTitle);
+  chatSection.appendChild(chatListContainer);
+  chatSection.appendChild(chatForm);
 
   panel.appendChild(nameLine);
+  panel.appendChild(roomSection);
   panel.appendChild(button);
+  panel.appendChild(chatSection);
   uiRoot.appendChild(panel);
 
+  const submitChat = () => {
+    const message = chatInput.value.trim();
+    if (!message) return;
+    socket.emit("lobby_message", { message });
+    chatInput.value = "";
+  };
+
   button.addEventListener("click", () => {
-    setScreen("room");
+    if (!selectedRoomId) return;
+    socket.emit("join_room", { roomId: selectedRoomId });
   });
+
+  createButton.addEventListener("click", () => {
+    const name = createInput.value.trim();
+    if (!name) return;
+    socket.emit("create_room", { name });
+    createInput.value = "";
+  });
+
+  createInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      createButton.click();
+    }
+  });
+
+  chatButton.addEventListener("click", submitChat);
+  chatInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") submitChat();
+  });
+
+  updateRoomListUI();
+  updateChatUI();
 };
 
 const renderScreen = () => {
   uiRoot.innerHTML = "";
+  roomListContainer = null;
+  roomErrorLine = null;
+  chatListContainer = null;
+  joinRoomButton = null;
   if (currentScreen === "room") {
     uiRoot.style.display = "none";
     return;
@@ -154,6 +361,32 @@ socket.on("connect", () => {
   if (nameConfirmed) {
     sendName(desiredName);
   }
+  socket.emit("list_rooms");
+});
+
+socket.on("rooms", (list: RoomInfo[]) => {
+  rooms = list;
+  if (rooms.length === 0) {
+    selectedRoomId = null;
+  } else if (!rooms.some((room) => room.id === selectedRoomId)) {
+    selectedRoomId = rooms[0].id;
+  }
+  if (roomErrorLine) roomErrorLine.textContent = "";
+  updateRoomListUI();
+});
+
+socket.on("room_joined", () => {
+  setScreen("room");
+});
+
+socket.on("room_error", (payload) => {
+  if (!roomErrorLine) return;
+  roomErrorLine.textContent = payload?.message ?? "部屋に入れませんでした。";
+});
+
+socket.on("lobby_message", (payload: LobbyMessage) => {
+  lobbyMessages.push(payload);
+  updateChatUI();
 });
 
 class GameScene extends Phaser.Scene {
